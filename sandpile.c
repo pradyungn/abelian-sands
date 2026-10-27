@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <immintrin.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -20,6 +21,7 @@ static void die(const char *s) {
 
 int N = 801;
 int8_t **grid;
+bool **gridcond;
 int *gridbounds;
 
 // you can also use this function to debug print your sandpile
@@ -73,24 +75,52 @@ static void render(char *filename) {
   free(pixels);
 }
 
-static void stabilize() {
-  int changed = 0;
+static void stabilize(int8_t** __restrict__ grid,
+                      bool** __restrict__ gridcond,
+                      int* __restrict__ gridbounds) {
+  bool changed;
   do {
-    changed = 0;
+    changed = false;
+
+    // use a two-phase algo
+    // phase 1: topple-check, local sub
+    // phase 2: cross-pile gather
+
     for (int i = 0; i < N; ++i) {
+      int j;
+      /* __m512i four = _mm512_set1_epi8(4); */
+      /* for (j = gridbounds[2*i]; gridbounds[2*i + 1] - j >= 64; j+=64) { */
+      /*   __m512i vec = _mm512_loadu_si512(&(grid[i][j])); */
+      /*   __mmask64 condvec = _mm512_test_epi8_mask(vec, four); */
+      /*   changed |= (condvec != 0); */
+
+      /*   vec = _mm512_mask_sub_epi8(vec, condvec, vec, four); */
+      /*   grid[i][j] -= ((int8_t)gridcond[i][j+1]) << 2; */
+      /*   _mm512_storeu_si512(&(grid[i][j]), vec); */
+
+      /*   // store the condvec */
+      /*   __m512i condvecex = _mm512_maskz_set1_epi8(condvec, 1); */
+      /*   _mm512_storeu_si512(&(gridcond[i][j+1]), condvecex); */
+      /* } */
+
+      for (j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
+        gridcond[i][j+1] = grid[i][j] >= 0x4;
+        changed |= gridcond[i][j+1]; // topple it
+        grid[i][j] -= ((int8_t)gridcond[i][j+1]) * 4;
+      }
+
       for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
-        if (grid[i][j] < 4)
-          continue;
-        changed = 1; // topple it
-        grid[i][j] -= 4;
-        if (i > 0)
-          grid[i - 1][j]++;
-        if (j > 0)
-          grid[i][j - 1]++;
-        if (i < N - 1)
-          grid[i + 1][j]++;
-        if (j < N - 1)
-          grid[i][j + 1]++;
+        grid[i][j] += (int8_t)gridcond[i][j]; // left
+        grid[i][j] += (int8_t)gridcond[i][j+2]; //right
+      }
+    }
+
+    for (int i=0; i < N; i++) {
+      for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
+        if (i > 0) // up
+          grid[i][j] += (int8_t)gridcond[i-1][j+1];
+        if (i < N - 1) // down
+          grid[i][j] += (int8_t) gridcond[i+1][j+1];
       }
     }
   } while (changed);
@@ -103,13 +133,13 @@ void find_identity() {
       grid[i][j] = 6;
     }
   }
-  stabilize();
+  stabilize(grid, gridcond, gridbounds);
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < N; ++j) {
       grid[i][j] = 6 - grid[i][j];
     }
   }
-  stabilize();
+  stabilize(grid, gridcond, gridbounds);
 }
 
 int main(int argc, char **argv) {
@@ -140,13 +170,21 @@ int main(int argc, char **argv) {
     gridbounds[2*i+1] = MIN(jpac, N/2 + jcirc_base);
   }
 
+  gridcond = (bool**)malloc(N * sizeof(bool*));
+  for (int i = 0; i < N; ++i) {
+    // add "halo" cells for this array
+    gridcond[i] = (bool*)calloc(N+2, sizeof(bool));
+  }
+
   find_identity();
 
   render("identity.png");
   for (int i = 0; i < N; ++i) {
     free(grid[i]);
+    free(gridcond[i]);
   }
   free(grid);
+  free(gridcond);
   free(gridbounds);
   return EXIT_SUCCESS;
 }
