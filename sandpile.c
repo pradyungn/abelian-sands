@@ -19,7 +19,8 @@ static void die(const char *s) {
 }
 
 int N = 801;
-int **grid;
+int8_t **grid;
+int *gridbounds;
 
 // you can also use this function to debug print your sandpile
 static void render(char *filename) {
@@ -77,28 +78,26 @@ static void stabilize() {
   do {
     changed = 0;
     for (int i = 0; i < N; ++i) {
-      for (int j = 0; j <= MAX(i, N - 1 - i); ++j) {
-        if ((i - N / 2) * (i - N / 2) + (j - N / 2) * (j - N / 2) <=
-            (N / 2) * (N / 2)) {
-          if (grid[i][j] < 4)
-            continue;
-          changed = 1; // topple it
-          grid[i][j] -= 4;
-          if (i > 0)
-            grid[i - 1][j]++;
-          if (j > 0)
-            grid[i][j - 1]++;
-          if (i < N - 1)
-            grid[i + 1][j]++;
-          if (j < N - 1)
-            grid[i][j + 1]++;
-        }
+      for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
+        if (grid[i][j] < 4)
+          continue;
+        changed = 1; // topple it
+        grid[i][j] -= 4;
+        if (i > 0)
+          grid[i - 1][j]++;
+        if (j > 0)
+          grid[i][j - 1]++;
+        if (i < N - 1)
+          grid[i + 1][j]++;
+        if (j < N - 1)
+          grid[i][j + 1]++;
       }
     }
   } while (changed);
 }
 
 void find_identity() {
+  // we can precompute a "change" mask for this.
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < N; ++j) {
       grid[i][j] = 6;
@@ -125,9 +124,20 @@ int main(int argc, char **argv) {
     die("grid size must be a positive int");
   N = (int)parsed;
 
-  grid = (int **)malloc(N * sizeof(int *));
+  grid = (int8_t **)malloc(N * sizeof(int8_t *));
   for (int i = 0; i < N; ++i) {
-    grid[i] = (int *)malloc(N * sizeof(int));
+    grid[i] = (int8_t *)malloc(N * sizeof(int8_t));
+  }
+
+  gridbounds = (int*)malloc(2 * N * sizeof(int));
+  for (int i=0; i<N; i++) {
+    // lower bound is always based on circle
+    int jcirc_base = (int)sqrt((N/2)*(N/2) - (i - N/2)*(i - N/2));
+    gridbounds[2*i] = MAX(0, N/2 - jcirc_base);
+
+    // two possible upper bounds -- circle, and *pacman*
+    int jpac = MAX(i, N - i - 1);
+    gridbounds[2*i+1] = MIN(jpac, N/2 + jcirc_base);
   }
 
   find_identity();
@@ -137,5 +147,6 @@ int main(int argc, char **argv) {
     free(grid[i]);
   }
   free(grid);
+  free(gridbounds);
   return EXIT_SUCCESS;
 }
