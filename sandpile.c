@@ -80,6 +80,7 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
                            int* __restrict__ gridbounds) {
   bool changed = false;
   for (int i = 0; i < N; ++i) {
+    bool oneshot = false;
     int j = gridbounds[2*i];
     __m512i four = _mm512_set1_epi8(4);
     for (; gridbounds[2*i + 1] >= j + 63; j+=64) {
@@ -88,7 +89,24 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
       changed |= (condvec != 0);
 
       vec = _mm512_mask_sub_epi8(vec, condvec, vec, four);
+
+      // shift down the condvec, use it to do some runing accumuldation
+      __m512i condvec_shr = _mm512_maskz_set1_epi8(condvec << 1, 1);
+      vec = _mm512_add_epi8(vec, condvec_shr);
+
+      // shift down the condvec, use it to do some runing accumuldation
+      __m512i condvec_shl = _mm512_maskz_set1_epi8(condvec >> 1, 1);
+      vec = _mm512_add_epi8(vec, condvec_shl);
+
       _mm512_storeu_si512(&(grid[i][j]), vec);
+
+      // manually accumulate in for the first position
+      grid[i][j] += gridcond[i][j];
+      // manually back-accumulate
+      if (oneshot)
+        grid[i][j - 1] += (int8_t) gridcond[i][j+1];
+      else
+        oneshot = true;
 
       // store the condvec
       __m512i condvecex = _mm512_maskz_set1_epi8(condvec, 1);
@@ -98,29 +116,34 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
     for (; j <= gridbounds[2*i + 1]; ++j) {
       gridcond[i][j+1] = grid[i][j] >= 0x4;
       changed |= gridcond[i][j+1]; // topple it
-      grid[i][j] -= ((int8_t)gridcond[i][j+1]) * 4;
+      grid[i][j] += ((int8_t)gridcond[i][j]) - ((int8_t)gridcond[i][j+1]) * 4;
+      // manually back-accumulate
+      if (oneshot)
+        grid[i][j - 1] += (int8_t) gridcond[i][j+1];
+      else
+        oneshot = true;
     }
 
     // second pass
-    j = gridbounds[2*i];
-    for (; j + 63 <= gridbounds[2*i + 1]; j+=64) {
-      __m512i vec = _mm512_loadu_si512(&(grid[i][j]));
+    /* j = gridbounds[2*i]; */
+    /* for (; j + 63 <= gridbounds[2*i + 1]; j+=64) { */
+    /*   __m512i vec = _mm512_loadu_si512(&(grid[i][j])); */
 
-      // left
-      __m512i condvec = _mm512_loadu_si512(&(gridcond[i][j]));
-      vec = _mm512_add_epi8(vec, condvec);
+    /*   /\* // left *\/ */
+    /*   /\* __m512i condvec = _mm512_loadu_si512(&(gridcond[i][j])); *\/ */
+    /*   /\* vec = _mm512_add_epi8(vec, condvec); *\/ */
 
-      // right
-      condvec = _mm512_loadu_si512(&(gridcond[i][j+2]));
-      vec = _mm512_add_epi8(vec, condvec);
+    /*   // right */
+    /*   __m512i condvec = _mm512_loadu_si512(&(gridcond[i][j+2])); */
+    /*   vec = _mm512_add_epi8(vec, condvec); */
 
-      _mm512_storeu_si512(&(grid[i][j]), vec);
-    }
+    /*   _mm512_storeu_si512(&(grid[i][j]), vec); */
+    /* } */
 
-    for (; j<=gridbounds[2*i+1]; ++j) {
-      grid[i][j] += (int8_t)gridcond[i][j]; // left
-      grid[i][j] += (int8_t)gridcond[i][j+2]; //right
-    }
+    /* for (; j<=gridbounds[2*i+1]; ++j) { */
+    /*   /\* grid[i][j] += (int8_t)gridcond[i][j]; // left *\/ */
+    /*   grid[i][j] += (int8_t)gridcond[i][j+2]; //right */
+    /* } */
   }
 
   return changed;
