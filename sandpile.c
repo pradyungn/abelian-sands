@@ -75,54 +75,81 @@ static void render(char *filename) {
   free(pixels);
 }
 
+inline bool sideways_pass (int8_t** __restrict__ grid,
+                           bool** __restrict__ gridcond,
+                           int* __restrict__ gridbounds) {
+  bool changed = false;
+  for (int i = 0; i < N; ++i) {
+    int j = gridbounds[2*i];
+    __m512i four = _mm512_set1_epi8(4);
+    for (; gridbounds[2*i + 1] >= j + 63; j+=64) {
+      __m512i vec = _mm512_loadu_si512(&(grid[i][j]));
+      __mmask64 condvec = _mm512_test_epi8_mask(vec, four);
+      changed |= (condvec != 0);
+
+      vec = _mm512_mask_sub_epi8(vec, condvec, vec, four);
+      _mm512_storeu_si512(&(grid[i][j]), vec);
+
+      // store the condvec
+      __m512i condvecex = _mm512_maskz_set1_epi8(condvec, 1);
+      _mm512_storeu_si512(&(gridcond[i][j+1]), condvecex);
+    }
+
+    for (; j <= gridbounds[2*i + 1]; ++j) {
+      gridcond[i][j+1] = grid[i][j] >= 0x4;
+      changed |= gridcond[i][j+1]; // topple it
+      grid[i][j] -= ((int8_t)gridcond[i][j+1]) * 4;
+    }
+
+    // second pass
+    j = gridbounds[2*i];
+    for (; j + 63 <= gridbounds[2*i + 1]; j+=64) {
+      __m512i vec = _mm512_loadu_si512(&(grid[i][j]));
+
+      // left
+      __m512i condvec = _mm512_loadu_si512(&(gridcond[i][j]));
+      vec = _mm512_add_epi8(vec, condvec);
+
+      // right
+      condvec = _mm512_loadu_si512(&(gridcond[i][j+2]));
+      vec = _mm512_add_epi8(vec, condvec);
+
+      _mm512_storeu_si512(&(grid[i][j]), vec);
+    }
+
+    for (; j<=gridbounds[2*i+1]; ++j) {
+      grid[i][j] += (int8_t)gridcond[i][j]; // left
+      grid[i][j] += (int8_t)gridcond[i][j+2]; //right
+    }
+  }
+
+  return changed;
+}
+
+inline void updown_pass(int8_t** __restrict__ grid,
+                        bool** __restrict__ gridcond,
+                        int* __restrict__ gridbounds) {
+  for (int i=0; i < N; i++) {
+    for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
+      if (i > 0) // up
+        grid[i][j] += (int8_t)gridcond[i-1][j+1];
+      if (i < N - 1) // down
+        grid[i][j] += (int8_t) gridcond[i+1][j+1];
+    }
+  }
+}
+
 static void stabilize(int8_t** __restrict__ grid,
                       bool** __restrict__ gridcond,
                       int* __restrict__ gridbounds) {
   bool changed;
   do {
-    changed = false;
-
     // use a two-phase algo
-    // phase 1: topple-check, local sub
-    // phase 2: cross-pile gather
+    // phase 1: topple-check, local sub, sideways gather
+    // phase 2: cross-pile gather from adjacent rows
 
-    for (int i = 0; i < N; ++i) {
-      int j;
-      /* __m512i four = _mm512_set1_epi8(4); */
-      /* for (j = gridbounds[2*i]; gridbounds[2*i + 1] - j >= 64; j+=64) { */
-      /*   __m512i vec = _mm512_loadu_si512(&(grid[i][j])); */
-      /*   __mmask64 condvec = _mm512_test_epi8_mask(vec, four); */
-      /*   changed |= (condvec != 0); */
-
-      /*   vec = _mm512_mask_sub_epi8(vec, condvec, vec, four); */
-      /*   grid[i][j] -= ((int8_t)gridcond[i][j+1]) << 2; */
-      /*   _mm512_storeu_si512(&(grid[i][j]), vec); */
-
-      /*   // store the condvec */
-      /*   __m512i condvecex = _mm512_maskz_set1_epi8(condvec, 1); */
-      /*   _mm512_storeu_si512(&(gridcond[i][j+1]), condvecex); */
-      /* } */
-
-      for (j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
-        gridcond[i][j+1] = grid[i][j] >= 0x4;
-        changed |= gridcond[i][j+1]; // topple it
-        grid[i][j] -= ((int8_t)gridcond[i][j+1]) * 4;
-      }
-
-      for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
-        grid[i][j] += (int8_t)gridcond[i][j]; // left
-        grid[i][j] += (int8_t)gridcond[i][j+2]; //right
-      }
-    }
-
-    for (int i=0; i < N; i++) {
-      for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
-        if (i > 0) // up
-          grid[i][j] += (int8_t)gridcond[i-1][j+1];
-        if (i < N - 1) // down
-          grid[i][j] += (int8_t) gridcond[i+1][j+1];
-      }
-    }
+    changed = sideways_pass(grid, gridcond, gridbounds);
+    updown_pass(grid, gridcond, gridbounds);
   } while (changed);
 }
 
