@@ -85,9 +85,13 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
     int j = gridbounds[2*i];
     int jmax = gridbounds[2*i + 1];
     __m512i four = _mm512_set1_epi8(4);
+
+    __mmask64 active_vec = ((__mmask64)~(0ULL)); // lot more dynamic instruction atm
     for (; j <= jmax; j+=64) {
-      int count = MIN(64, jmax - j + 1);
-      __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count); // lot more dynamic instruction atm
+      int count = jmax - j + 1;
+      if (count < 64) {
+        active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
+      }
 
       __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
       __mmask64 condvec = _mm512_test_epi8_mask(vec, four);
@@ -103,9 +107,12 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
 
     // second pass
     j = gridbounds[2*i];
+    active_vec = ((__mmask64)~(0ULL));
     for (; j <= jmax; j+=64) {
-      int count = MIN(64, jmax - j + 1);
-      __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
+      int count = jmax - j + 1;
+      if (count < 64) {
+        active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
+      }
       __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
 
       // left
@@ -130,9 +137,12 @@ inline void updown_pass(int8_t** __restrict__ grid,
   for (int i=Ns; i < Ne; i++) {
     int j = gridbounds[2*i];
     int jmax = gridbounds[2*i + 1];
+    __mmask64 active_vec = ((__mmask64)~(0ULL));
     for (; j <= jmax; j+=64) {
-      int count = MIN(64, jmax - j + 1);
-      __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
+      int count = jmax - j + 1;
+      if (count < 64) {
+        active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
+      }
       __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
 
       // left
