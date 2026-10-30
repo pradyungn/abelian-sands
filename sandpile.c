@@ -34,7 +34,7 @@ static void render(char *filename) {
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < N; ++j) {
       unsigned char r = 0, g = 0, b = 0;
-      switch (grid[i][j]) {
+      switch (grid[MIN(i, N-1-i)][j]) {
       case 0: // obsidian
         r = 15;
         g = 15;
@@ -169,24 +169,25 @@ static void stabilize(int8_t** __restrict__ grid,
     // phase 1: topple-check, local sub, sideways gather
     // phase 2: cross-pile gather from adjacent rows
 
-    int BLOCKSIZE = MAX(128, (N+3)/4);
+    int halfN = (N+1)/2;
+    int BLOCKSIZE = MIN(64, MAX(128, (halfN+3)/4));
 
     changed = false;
 
     #pragma omp parallel for reduction(|:changed)
-    for (int i=0; i < (N+BLOCKSIZE-1)/BLOCKSIZE; i++) {
+    for (int i=0; i < (halfN+BLOCKSIZE-1)/BLOCKSIZE; i++) {
       int Ns = BLOCKSIZE*i;
-      int Ne = MIN(N, Ns+BLOCKSIZE);
+      int Ne = MIN(halfN, Ns+BLOCKSIZE);
       changed |= sideways_pass(grid, gridcond, gridbounds, Ns, Ne);
       updown_pass(grid, gridcond, gridbounds, Ns, Ne);
     }
 
     // iterate over blocks, "stitch"
-    for (int i=BLOCKSIZE; i < N; i+=BLOCKSIZE) {
+    for (int i=BLOCKSIZE; i < halfN; i+=BLOCKSIZE) {
       int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
       int jmax = MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
 
-      for (; j + 63 <= gridbounds[2*i + 1]; j+=64) {
+      for (; j + 63 <= jmax; j+=64) {
         __m512i vec = _mm512_loadu_si512(&(grid[i][j]));
         __m512i condvec = _mm512_loadu_si512(&(gridcond[i-1][j+1]));
         vec = _mm512_add_epi8(vec, condvec);
@@ -204,6 +205,20 @@ static void stabilize(int8_t** __restrict__ grid,
       }
     }
 
+    // need to re-accumulate at bottom boundary of upper half
+    int accum_row = (N%2 == 0) ? halfN-1 : halfN-2;
+    int j = gridbounds[2*(accum_row)];
+
+    for (; j + 63 <= gridbounds[2*accum_row + 1]; j+=64) {
+      __m512i vec = _mm512_loadu_si512(&(grid[halfN-1][j]));
+      __m512i condvec = _mm512_loadu_si512(&(gridcond[accum_row][j+1]));
+      vec = _mm512_add_epi8(vec, condvec);
+      _mm512_storeu_si512(&(grid[halfN-1][j]), vec);
+    }
+
+    for (; j <= gridbounds[2*accum_row + 1]; ++j) {
+      grid[halfN-1][j] += (int8_t) gridcond[accum_row][j+1];
+    }
   } while (changed);
 }
 
@@ -215,7 +230,7 @@ void find_identity() {
     }
   }
   stabilize(grid, gridcond, gridbounds);
-  for (int i = 0; i < N; ++i) {
+  for (int i = 0; i < (N+1)/2; ++i) {
     for (int j = 0; j < N; ++j) {
       grid[i][j] = 6 - grid[i][j];
     }
