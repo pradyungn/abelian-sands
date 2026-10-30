@@ -161,7 +161,7 @@ static void stabilize(int8_t** __restrict__ grid,
     // phase 1: topple-check, local sub, sideways gather
     // phase 2: cross-pile gather from adjacent rows
 
-    int BLOCKS = MAX(4, N*N/(10,000));
+    int BLOCKS = 4; // hardcoded to core count, for now
     int BLOCKSIZE = (N+BLOCKS-1)/BLOCKS;
 
     changed = false;
