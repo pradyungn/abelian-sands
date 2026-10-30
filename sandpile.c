@@ -169,7 +169,7 @@ static void stabilize(int8_t** __restrict__ grid,
     // phase 1: topple-check, local sub, sideways gather
     // phase 2: cross-pile gather from adjacent rows
 
-    int BLOCKSIZE = MAX(128, (N+3)/4);
+    int BLOCKSIZE = (N+3)/4;
 
     changed = false;
 
