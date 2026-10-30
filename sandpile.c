@@ -77,9 +77,10 @@ static void render(char *filename) {
 
 inline bool sideways_pass (int8_t** __restrict__ grid,
                            bool** __restrict__ gridcond,
-                           int* __restrict__ gridbounds) {
+                           int* __restrict__ gridbounds,
+                           int Ns, int Ne) {
   bool changed = false;
-  for (int i = 0; i < N; ++i) {
+  for (int i = Ns; i < Ne; ++i) {
     int j = gridbounds[2*i];
     __m512i four = _mm512_set1_epi8(4);
     for (; gridbounds[2*i + 1] >= j + 63; j+=64) {
@@ -128,12 +129,13 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
 
 inline void updown_pass(int8_t** __restrict__ grid,
                         bool** __restrict__ gridcond,
-                        int* __restrict__ gridbounds) {
-  for (int i=0; i < N; i++) {
+                        int* __restrict__ gridbounds,
+                        int Ns, int Ne) {
+  for (int i=Ns; i < Ne; i++) {
     for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
-      if (i > 0) // up
+      if (i > Ns) // up
         grid[i][j] += (int8_t)gridcond[i-1][j+1];
-      if (i < N - 1) // down
+      if (i < Ne-1) // down
         grid[i][j] += (int8_t) gridcond[i+1][j+1];
     }
   }
@@ -148,8 +150,27 @@ static void stabilize(int8_t** __restrict__ grid,
     // phase 1: topple-check, local sub, sideways gather
     // phase 2: cross-pile gather from adjacent rows
 
-    changed = sideways_pass(grid, gridcond, gridbounds);
-    updown_pass(grid, gridcond, gridbounds);
+    int BLOCKSIZE = MAX(128, (N+3)/4);
+
+    changed = false;
+
+    // #pragma omp parallel for reduction(|:changed)
+    for (int i=0; i < (N+BLOCKSIZE-1)/BLOCKSIZE; i++) {
+      int Ns = BLOCKSIZE*i;
+      int Ne = MIN(N, Ns+BLOCKSIZE);
+      changed |= sideways_pass(grid, gridcond, gridbounds, Ns, Ne);
+      updown_pass(grid, gridcond, gridbounds, Ns, Ne);
+    }
+
+    // iterate over blocks, "stitch"
+    for (int i=BLOCKSIZE; i < N; i+=BLOCKSIZE) {
+      for (int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
+           j <= MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
+           ++j) {
+        grid[i-1][j] += (int8_t)gridcond[i][j+1];
+        grid[i][j] += (int8_t) gridcond[i-1][j+1];
+      }
+    }
   } while (changed);
 }
 
