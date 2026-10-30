@@ -132,7 +132,26 @@ inline void updown_pass(int8_t** __restrict__ grid,
                         int* __restrict__ gridbounds,
                         int Ns, int Ne) {
   for (int i=Ns; i < Ne; i++) {
-    for (int j = gridbounds[2*i]; j <= gridbounds[2*i + 1]; ++j) {
+    int j = gridbounds[2*i];
+    for (; j + 63 <= gridbounds[2*i + 1]; j+=64) {
+      __m512i vec = _mm512_loadu_si512(&(grid[i][j]));
+
+      // left
+      if (i > Ns) {
+        __m512i condvec = _mm512_loadu_si512(&(gridcond[i-1][j+1]));
+        vec = _mm512_add_epi8(vec, condvec);
+      }
+
+      // right
+      if (i < Ne-1) {
+        __m512i condvec = _mm512_loadu_si512(&(gridcond[i+1][j+1]));
+        vec = _mm512_add_epi8(vec, condvec);
+      }
+
+      _mm512_storeu_si512(&(grid[i][j]), vec);
+    }
+
+    for (; j <= gridbounds[2*i + 1]; ++j) {
       if (i > Ns) // up
         grid[i][j] += (int8_t)gridcond[i-1][j+1];
       if (i < Ne-1) // down
@@ -165,13 +184,27 @@ static void stabilize(int8_t** __restrict__ grid,
 
     // iterate over blocks, "stitch"
     for (int i=BLOCKSIZE; i < N; i+=BLOCKSIZE) {
-      for (int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
-           j <= MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
-           ++j) {
+      int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
+      int jmax = MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
+
+      for (; j + 63 <= gridbounds[2*i + 1]; j+=64) {
+        __m512i vec = _mm512_loadu_si512(&(grid[i][j]));
+        __m512i condvec = _mm512_loadu_si512(&(gridcond[i-1][j+1]));
+        vec = _mm512_add_epi8(vec, condvec);
+        _mm512_storeu_si512(&(grid[i][j]), vec);
+
+        vec = _mm512_loadu_si512(&(grid[i-1][j]));
+        condvec = _mm512_loadu_si512(&(gridcond[i][j+1]));
+        vec = _mm512_add_epi8(vec, condvec);
+        _mm512_storeu_si512(&(grid[i-1][j]), vec);
+      }
+
+      for (; j <= jmax; ++j) {
         grid[i-1][j] += (int8_t)gridcond[i][j+1];
         grid[i][j] += (int8_t) gridcond[i-1][j+1];
       }
     }
+
   } while (changed);
 }
 
