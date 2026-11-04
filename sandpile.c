@@ -84,7 +84,11 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
   for (int i = Ns; i < Ne; ++i) {
     int j = gridbounds[2*i];
     int jmax = gridbounds[2*i + 1];
-    __m512i four = _mm512_set1_epi8(4);
+    const __m512i four = _mm512_set1_epi8(4);
+    const __m512i one = _mm512_set1_epi8(1);
+
+    bool fflag = false;
+
     for (; j <= jmax; j+=64) {
       int count = MIN(64, jmax - j + 1);
       __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count); // lot more dynamic instruction atm
@@ -92,31 +96,35 @@ inline bool sideways_pass (int8_t** __restrict__ grid,
       __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
       __mmask64 condvec = _mm512_test_epi8_mask(vec, four);
       changed |= (condvec != 0);
-
       vec = _mm512_mask_sub_epi8(vec, condvec, vec, four);
+
+      // in parallel, generate the "update" vec
+      __mmask64 l_condvec = condvec << 1;
+      __mmask64 r_condvec = condvec >> 1;
+      __m512i l_vec = _mm512_maskz_set1_epi8(l_condvec, 1);
+      __m512i uvec = _mm512_mask_add_epi8(l_vec, r_condvec, l_vec, one);
+
+      vec = _mm512_add_epi8(vec, uvec);
+
+      if (i > Ns) {
+        __m512i up_condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i-1][j+1]));
+        vec = _mm512_add_epi8(vec, up_condvec);
+      }
+
       _mm512_mask_storeu_epi8(&(grid[i][j]), active_vec, vec);
 
       // store the condvec
       __m512i condvecex = _mm512_maskz_set1_epi8(condvec, 1);
       _mm512_mask_storeu_epi8(&(gridcond[i][j+1]), active_vec, condvecex);
-    }
 
-    // second pass
-    j = gridbounds[2*i];
-    for (; j <= jmax; j+=64) {
-      int count = MIN(64, jmax - j + 1);
-      __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
-      __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
 
-      // left
-      __m512i condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i][j]));
-      vec = _mm512_add_epi8(vec, condvec);
-
-      // right
-      condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i][j+2]));
-      vec = _mm512_add_epi8(vec, condvec);
-
-      _mm512_mask_storeu_epi8(&(grid[i][j]), active_vec, vec);
+      // stitch halo elements per block
+      grid[i][j] += gridcond[i][j];
+      if (fflag) {
+        grid[i][j-1] += gridcond[i][j+1];
+      } else {
+        fflag = true;
+      }
     }
   }
 
@@ -127,7 +135,7 @@ inline void updown_pass(int8_t** __restrict__ grid,
                         bool** __restrict__ gridcond,
                         int* __restrict__ gridbounds,
                         int Ns, int Ne) {
-  for (int i=Ns; i < Ne; i++) {
+  for (int i=Ns; i < Ne-1; i++) {
     int j = gridbounds[2*i];
     int jmax = gridbounds[2*i + 1];
     for (; j <= jmax; j+=64) {
@@ -135,18 +143,9 @@ inline void updown_pass(int8_t** __restrict__ grid,
       __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
       __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
 
-      // left
-      if (i > Ns) {
-        __m512i condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i-1][j+1]));
-        vec = _mm512_add_epi8(vec, condvec);
-      }
-
-      // right
-      if (i < Ne-1) {
-        __m512i condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i+1][j+1]));
-        vec = _mm512_add_epi8(vec, condvec);
-      }
-
+      // accumulate from below
+      __m512i condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i+1][j+1]));
+      vec = _mm512_add_epi8(vec, condvec);
       _mm512_mask_storeu_epi8(&(grid[i][j]), active_vec, vec);
     }
   }
