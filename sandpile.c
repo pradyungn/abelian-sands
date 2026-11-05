@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <immintrin.h>
 #include <omp.h>
+#include <time.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -151,56 +152,86 @@ inline void updown_pass(int8_t** __restrict__ grid,
   }
 }
 
-static void stabilize(int8_t** __restrict__ grid,
-                      bool** __restrict__ gridcond,
-                      int* __restrict__ gridbounds) {
-  bool changed;
-  do {
+inline void stabilize_kernel(int8_t** __restrict__ grid,
+                             bool** __restrict__ gridcond,
+                             int* __restrict__ gridbounds,
+                             int* epoch_flag) {
+  for (int epoch=0; ; epoch++) {
     // use a two-phase algo
     // phase 1: topple-check, local sub, sideways gather
     // phase 2: cross-pile gather from adjacent rows
 
-    int BLOCKS = 4; // hardcoded to core count, for now
+    bool lc_changed = false;
+    const int tid = omp_get_thread_num();
+    const int tct = omp_get_num_threads();
+
+    int BLOCKS = tct; // hardcoded to core count, for now
     int BLOCKSIZE = (N+BLOCKS-1)/BLOCKS;
 
-    changed = false;
+    int Ns = BLOCKSIZE*tid;
+    int Ne = MIN(N, Ns+BLOCKSIZE);
+    lc_changed |= sideways_pass(grid, gridcond, gridbounds, Ns, Ne);
+    updown_pass(grid, gridcond, gridbounds, Ns, Ne);
 
-    #pragma omp parallel reduction(|:changed)
-    {
-      const int tid = omp_get_thread_num();
-      const int tct = omp_get_num_threads();
+    if (lc_changed) {
+      #pragma omp atomic write
+      *epoch_flag = epoch;
+    }
+    #pragma omp barrier
 
-      for (int i=tid; i<BLOCKS; i +=tct) {
-        int Ns = BLOCKSIZE*i;
-        int Ne = MIN(N, Ns+BLOCKSIZE);
-        changed |= sideways_pass(grid, gridcond, gridbounds, Ns, Ne);
-        updown_pass(grid, gridcond, gridbounds, Ns, Ne);
-      }
+    if (tid > 0) {
+      int i = tid*BLOCKSIZE;
+      int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
+      int jmax = MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
 
-      #pragma omp barrier
+      for (; j <= jmax; j+=64) {
+        int count = MIN(64, jmax - j + 1);
+        __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
 
-      for (int i=BLOCKSIZE*tid; i < N; i += BLOCKSIZE*tct) {
-        int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
-        int jmax = MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
+        __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
+        __m512i condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i-1][j+1]));
+        vec = _mm512_add_epi8(vec, condvec);
+        _mm512_mask_storeu_epi8(&(grid[i][j]), active_vec, vec);
 
-        for (; j <= gridbounds[2*i + 1]; j+=64) {
-          int count = MIN(64, jmax - j + 1);
-          __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
-
-          __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
-          __m512i condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i-1][j+1]));
-          vec = _mm512_add_epi8(vec, condvec);
-          _mm512_mask_storeu_epi8(&(grid[i][j]), active_vec, vec);
-
-          vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i-1][j]));
-          condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i][j+1]));
-          vec = _mm512_add_epi8(vec, condvec);
-          _mm512_mask_storeu_epi8(&(grid[i-1][j]), active_vec, vec);
-        }
+        vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i-1][j]));
+        condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i][j+1]));
+        vec = _mm512_add_epi8(vec, condvec);
+        _mm512_mask_storeu_epi8(&(grid[i-1][j]), active_vec, vec);
       }
     }
 
-  } while (changed);
+    if (*epoch_flag < epoch) break;
+    #pragma omp barrier
+  }
+}
+
+static void stabilize(int8_t** __restrict__ grid,
+                      bool** __restrict__ gridcond,
+                      int* __restrict__ gridbounds) {
+  int changed_epoch = -1;
+  int second_epoch = -1;
+
+  #pragma omp parallel
+  {
+    // initial stabilization
+    stabilize_kernel(grid, gridcond, gridbounds, &changed_epoch);
+
+    // invert owned region -- block params matched to stabkern
+    int BLOCKS = omp_get_num_threads();
+    int BLOCKSIZE = (N+BLOCKS-1)/BLOCKS;
+
+    int Ns = BLOCKSIZE*omp_get_thread_num();
+    int Ne = MIN(Ns + BLOCKSIZE, N);
+
+    for (int i = Ns; i < Ne; ++i) {
+      for (int j = 0; j < N; ++j) {
+        grid[i][j] = 6 - grid[i][j];
+      }
+    }
+
+    // run stabilization again
+    stabilize_kernel(grid, gridcond, gridbounds, &second_epoch);
+  }
 }
 
 void find_identity() {
@@ -208,12 +239,6 @@ void find_identity() {
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < N; ++j) {
       grid[i][j] = 6;
-    }
-  }
-  stabilize(grid, gridcond, gridbounds);
-  for (int i = 0; i < N; ++i) {
-    for (int j = 0; j < N; ++j) {
-      grid[i][j] = 6 - grid[i][j];
     }
   }
   stabilize(grid, gridcond, gridbounds);
