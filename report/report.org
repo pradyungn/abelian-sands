@@ -23,14 +23,11 @@ Flamegraphs in early runs of the program showed that almost all of the runtime w
 Most of this homework was spent optimizing =stabilize()= by inspection and intuition, as =stabilize()= is a fairly shallow function.
 
 * Optimizations
-All numbers were collected on the course VM, with each benchmark run up to 10 times until net runtime hit 3 minutes, at which point the outstanding run would run to completion.
-The minimum runtime across these runs is the reported benchmark runtime.
-This provides coarse-grain estimates of runtime for long-running baselines while giving fairly accurate insight into parameters for the final version.
-
-
 ** Assumptions
 Many of the optimizations rely on the AVX-512 extenion for x86 CPUs. 
 This is available on the course VMs and most modern desktops, but not on ARM machines or older Intel/AMD CPUs.
+
+** Precompute Pac-Man Bounds
 
 ** Manual Barriers
 I noticed that the stabilize call had effectively the same data blocks held constant through all of its parallel regions -- there was no need to dynamically re-distribute and re-schedule each time.
@@ -41,7 +38,15 @@ Benchmarks from this point were run with =OMP_WAIT_POLICY=active= set as an envi
 Setting this environment variable treats the barrier as a spin-wait, improving wake-up latency at the cost of power.
 
 * Evaluation
-Man
+** Methodology
+All numbers were collected on the course VM.
+To minimize noise, each benchmark is run for at least 10 iterations, or the minimum iteration count to hit 10 seconds (in order to smooth any transient noise).
+The minimum runtime across these runs is the reported benchmark runtime.
+
+Iterations are stopped if overall runtime exceeds 3 minutes at any point.
+This provides coarse-grain estimates of runtime for long-running baselines while giving fairly accurate insight into parameters for the final version.
+
+** Results
 
 * Failed Optimizations
 Fah
