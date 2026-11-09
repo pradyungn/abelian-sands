@@ -1,0 +1,46 @@
+#+title: Optimizing Abelian Sandpile Stabilization
+#+subtitle: CS598APE, Fall 2026
+#+latex_class: sigplan
+#+options: author:nil date:nil
+
+# --- acmart front matter -------------------------------------------------
+#+latex_header: \author{Pradyun Narkadamilli}
+#+latex_header: \affiliation{\institution{University of Illinois Urbana-Champaign}\city{Urbana}\state{IL}\country{USA}}
+#+latex_header: \email{pradyun2@illinois.edu}
+#+latex_header: \setcopyright{none}
+#+latex_header: \settopmatter{printacmref=false, printccs=false, printfolios=true}
+#+latex_header: \renewcommand\footnotetextcopyrightpermission[1]{}
+#+latex_header: \acmConference{CS598APE}{Fall 2026}{Urbana, IL}
+
+* Introduction
+In Section [[Optimizations]] I describe each optimization I implemented.
+Section~[[Evaluation]] summarizes results across my optimizations. 
+Finally, in Section~[[Failed Optimizations]] I discuss some optimizations I tried that did not end up working.
+
+I have published a copy of my code at: [[https://github.com/pradyungn/abelian-sands]].
+
+Flamegraphs in early runs of the program showed that almost all of the runtime was spent in =find_identity()=, which is dominated of two expensive =stabilize()= calls.
+Most of this homework was spent optimizing =stabilize()= by inspection and intuition, as =stabilize()= is a fairly shallow function.
+
+* Optimizations
+All numbers were collected on the course VM, with each benchmark run up to 10 times until net runtime hit 3 minutes, at which point the outstanding run would run to completion.
+This provides coarse-grain estimates of runtime for long-running baselines while giving fairly accurate insight into parameters for the final version.
+
+
+** Assumptions
+Many of the optimizations rely on the AVX-512 extenion for x86 CPUs. 
+This is available on the course VMs and most modern desktops, but not on ARM machines or older Intel/AMD CPUs.
+
+** Manual Barriers
+I noticed that the stabilize call had effectively the same data blocks held constant through all of its parallel regions -- there was no need to dynamically re-distribute and re-schedule each time.
+Instead, I wrapped the loop body of =stabilize= in a parallel region and manually added barriers in between the different phases to maintain data dependences.
+
+Note that the openMP barrier implementation can occasionally lead to thread sleeps on barrier wait, spuriously increasing runtimes.
+Benchmarks from this point were run with =OMP_WAIT_POLICY=active= set as an environment variable to guard against this.
+Setting this environment variable treats the barrier as a spin-wait, improving wake-up latency at the cost of power.
+
+* Evaluation
+Man
+
+* Failed Optimizations
+Fah
