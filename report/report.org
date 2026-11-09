@@ -24,6 +24,7 @@ Most of this homework was spent optimizing =stabilize()= by inspection and intui
 
 * Optimizations
 All numbers were collected on the course VM, with each benchmark run up to 10 times until net runtime hit 3 minutes, at which point the outstanding run would run to completion.
+The minimum runtime across these runs is the reported benchmark runtime.
 This provides coarse-grain estimates of runtime for long-running baselines while giving fairly accurate insight into parameters for the final version.
 
 
