@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include <immintrin.h>
+#include <omp.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -165,34 +166,38 @@ static void stabilize(int8_t** __restrict__ grid,
 
     changed = false;
 
-    #pragma omp parallel for reduction(|:changed)
-    for (int i=0; i < (N+BLOCKSIZE-1)/BLOCKSIZE; i++) {
-      int Ns = BLOCKSIZE*i;
-      int Ne = MIN(N, Ns+BLOCKSIZE);
-      changed |= sideways_pass(grid, gridcond, gridbounds, Ns, Ne);
-      updown_pass(grid, gridcond, gridbounds, Ns, Ne);
-    }
+    #pragma omp parallel reduction(|:changed)
+    {
+      const int tid = omp_get_thread_num();
+      const int tct = omp_get_num_threads();
 
-    // iterate over blocks, "stitch"
-    for (int i=BLOCKSIZE; i < N; i+=BLOCKSIZE) {
-      int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
-      int jmax = MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
-
-      for (; j + 63 <= gridbounds[2*i + 1]; j+=64) {
-        __m512i vec = _mm512_loadu_si512(&(grid[i][j]));
-        __m512i condvec = _mm512_loadu_si512(&(gridcond[i-1][j+1]));
-        vec = _mm512_add_epi8(vec, condvec);
-        _mm512_storeu_si512(&(grid[i][j]), vec);
-
-        vec = _mm512_loadu_si512(&(grid[i-1][j]));
-        condvec = _mm512_loadu_si512(&(gridcond[i][j+1]));
-        vec = _mm512_add_epi8(vec, condvec);
-        _mm512_storeu_si512(&(grid[i-1][j]), vec);
+      for (int i=tid; i<BLOCKS; i +=tct) {
+        int Ns = BLOCKSIZE*i;
+        int Ne = MIN(N, Ns+BLOCKSIZE);
+        changed |= sideways_pass(grid, gridcond, gridbounds, Ns, Ne);
+        updown_pass(grid, gridcond, gridbounds, Ns, Ne);
       }
 
-      for (; j <= jmax; ++j) {
-        grid[i-1][j] += (int8_t)gridcond[i][j+1];
-        grid[i][j] += (int8_t) gridcond[i-1][j+1];
+      #pragma omp barrier
+
+      for (int i=BLOCKSIZE*tid; i < N; i += BLOCKSIZE*tct) {
+        int j = MAX(gridbounds[2*i], gridbounds[2*(i-1)]);
+        int jmax = MIN(gridbounds[2*i + 1], gridbounds[2*(i-1) + 1]);
+
+        for (; j <= gridbounds[2*i + 1]; j+=64) {
+          int count = MIN(64, jmax - j + 1);
+          __mmask64 active_vec = ((__mmask64)~(0ULL)) >> (64 - count);
+
+          __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i][j]));
+          __m512i condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i-1][j+1]));
+          vec = _mm512_add_epi8(vec, condvec);
+          _mm512_mask_storeu_epi8(&(grid[i][j]), active_vec, vec);
+
+          vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[i-1][j]));
+          condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[i][j+1]));
+          vec = _mm512_add_epi8(vec, condvec);
+          _mm512_mask_storeu_epi8(&(grid[i-1][j]), active_vec, vec);
+        }
       }
     }
 
