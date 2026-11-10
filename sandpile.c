@@ -194,16 +194,27 @@ static void stabilize_kernel(int8_t **__restrict__ grid,
             _mm512_maskz_loadu_epi8(active_vec, &(gridcond[Ns - 1][j + 1]));
         vec = _mm512_add_epi8(vec, condvec);
         _mm512_mask_storeu_epi8(&(grid[Ns][j]), active_vec, vec);
+      }
+    }
 
-        vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[Ns - 1][j]));
-        condvec = _mm512_maskz_loadu_epi8(active_vec, &(gridcond[Ns][j + 1]));
+    if (Ne < N-1) {
+      int j = MAX(gridbounds[2 * (Ne-1)], gridbounds[2 * Ne]);
+      int jmax = MIN(gridbounds[2 * (Ne-1) + 1], gridbounds[2 * Ne + 1]);
+
+      for (; j <= jmax; j += 64) {
+        int count = MIN(64, jmax - j + 1);
+        __mmask64 active_vec = ((__mmask64) ~(0ULL)) >> (64 - count);
+
+        __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[Ne-1][j]));
+        __m512i condvec =
+            _mm512_maskz_loadu_epi8(active_vec, &(gridcond[Ne][j + 1]));
         vec = _mm512_add_epi8(vec, condvec);
-        _mm512_mask_storeu_epi8(&(grid[Ns - 1][j]), active_vec, vec);
+        _mm512_mask_storeu_epi8(&(grid[Ne-1][j]), active_vec, vec);
       }
     }
 
     // spoof the thing
-    if ((trueN%2) == 1 && Ns < N && Ne == N) {
+    else if ((trueN%2) == 1 && Ns < N && Ne == N) {
       int j = MAX(gridbounds[2 * (N - 1)], gridbounds[2 * ((N - 1) - 1)]);
       int jmax = MIN(gridbounds[2 * (N - 1) + 1], gridbounds[2 * ((N - 1) - 1) + 1]);
 
