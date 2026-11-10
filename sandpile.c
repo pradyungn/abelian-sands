@@ -22,6 +22,7 @@ static void die(const char *s) {
 }
 
 int N = 801;
+int trueN;
 int8_t **grid;
 bool **gridcond;
 int *gridbounds;
@@ -36,7 +37,9 @@ static void render(char *filename) {
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < N; ++j) {
       unsigned char r = 0, g = 0, b = 0;
-      switch (grid[i][j]) {
+
+      int8_t sel = (N%2 == 0 || i < (N+1)/2) ? grid[i][j] : grid[N-(i+1)][j];
+      switch (sel) {
       case 0: // obsidian
         r = 15;
         g = 15;
@@ -199,6 +202,23 @@ static void stabilize_kernel(int8_t **__restrict__ grid,
       }
     }
 
+    // spoof the thing
+    if ((trueN%2) == 1 && Ns < N && Ne == N) {
+      int j = MAX(gridbounds[2 * (N - 1)], gridbounds[2 * ((N - 1) - 1)]);
+      int jmax = MIN(gridbounds[2 * (N - 1) + 1], gridbounds[2 * ((N - 1) - 1) + 1]);
+
+      for (; j <= jmax; j += 64) {
+        int count = MIN(64, jmax - j + 1);
+        __mmask64 active_vec = ((__mmask64) ~(0ULL)) >> (64 - count);
+
+        __m512i vec = _mm512_maskz_loadu_epi8(active_vec, &(grid[(N - 1)][j]));
+        __m512i condvec =
+            _mm512_maskz_loadu_epi8(active_vec, &(gridcond[(N - 1) - 1][j + 1]));
+        vec = _mm512_add_epi8(vec, condvec);
+        _mm512_mask_storeu_epi8(&(grid[(N - 1)][j]), active_vec, vec);
+      }
+    }
+
     if (*epoch_flag < epoch)
       break;
 #pragma omp barrier
@@ -223,7 +243,7 @@ static void stabilize(int8_t **__restrict__ grid, bool **__restrict__ gridcond,
     int Ne = MIN(Ns + BLOCKSIZE, N);
 
     for (int i = Ns; i < Ne; ++i) {
-      for (int j = 0; j < N; ++j) {
+      for (int j = 0; j < trueN; ++j) {
         grid[i][j] = 6 - grid[i][j];
       }
     }
@@ -236,7 +256,7 @@ static void stabilize(int8_t **__restrict__ grid, bool **__restrict__ gridcond,
 void find_identity() {
   // we can precompute a "change" mask for this.
   for (int i = 0; i < N; ++i) {
-    for (int j = 0; j < N; ++j) {
+    for (int j = 0; j < trueN; ++j) {
       grid[i][j] = 6;
     }
   }
@@ -277,7 +297,12 @@ int main(int argc, char **argv) {
     gridcond[i] = (bool *)calloc(N + 2, sizeof(bool));
   }
 
+  trueN = N;
+  if (N%2 == 1) {
+    N = (N+1)/2;
+  }
   find_identity();
+  N = trueN;
 
   render("identity.png");
   for (int i = 0; i < N; ++i) {
